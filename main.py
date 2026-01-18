@@ -6,14 +6,13 @@ import time
 
 # Allow running this script directly from anywhere
 current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-if parent_dir not in sys.path:
-    sys.path.append(parent_dir)
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
 
-from browser_automator.drivers.factory import get_driver
-from browser_automator.automators.perplexity import PerplexityAutomator
-from browser_automator.automators.gemini import GeminiAutomator
-from browser_automator.config import DATA_DIR, PERPLEXITY_URL, GEMINI_URL
+from drivers.factory import get_driver
+from automators.perplexity import PerplexityAutomator
+from automators.gemini import GeminiAutomator
+from config import DATA_DIR, PERPLEXITY_URL, GEMINI_URL
 
 def save_response(platform, query, response):
     timestamp = int(time.time())

@@ -5,19 +5,25 @@ FastAPI-based server for remote browser automation.
 
 import asyncio
 import time
+import os
+import sys
+import json
 from typing import Optional
+
+# Allow running this script directly
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
 from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from browser_automator.api_config import API_KEY, AVAILABLE_MODELS
-from browser_automator.drivers.factory import get_driver
-from browser_automator.automators.perplexity import PerplexityAutomator
-from browser_automator.automators.gemini import GeminiAutomator
-from browser_automator.config import DATA_DIR
-
-import os
-import json
+from api_config import API_KEY, AVAILABLE_MODELS
+from drivers.factory import get_driver
+from automators.perplexity import PerplexityAutomator
+from automators.gemini import GeminiAutomator
+from config import DATA_DIR
 
 # --- FastAPI App ---
 app = FastAPI(
@@ -197,7 +203,7 @@ async def deep_research(request: DeepResearchRequest, api_key: str = Depends(ver
 # --- Main Entry Point ---
 if __name__ == "__main__":
     import uvicorn
-    from browser_automator.api_config import HOST, PORT
+    from api_config import HOST, PORT
     
     if not API_KEY:
         print("ERROR: BROWSER_API_KEY must be set before starting the server.")

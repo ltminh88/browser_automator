@@ -1,8 +1,17 @@
-from browser_automator.automators.base import BaseAutomator
-from browser_automator.config import GEMINI_URL, GEMINI_SELECTORS
+import os
+import sys
+import time
+
+# Allow imports from parent directory
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
+from automators.base import BaseAutomator
+from config import GEMINI_URL, GEMINI_SELECTORS
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.by import By
-import time
 
 class GeminiAutomator(BaseAutomator):
     def navigate(self):

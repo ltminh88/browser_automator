@@ -1,6 +1,14 @@
+import os
+import sys
+
+# Allow imports from parent directory
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
 import undetected_chromedriver as uc
-# from selenium.webdriver.common.options import Options
-from browser_automator.config import USER_DATA_DIR
+from config import USER_DATA_DIR
 
 def get_driver(headless=False, use_profile=True):
     """
