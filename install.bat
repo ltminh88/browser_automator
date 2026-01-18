@@ -33,7 +33,18 @@ if exist "C:\Program Files\Google\Chrome\Application\chrome.exe" (
 
 echo.
 echo Installing Python dependencies...
-pip install -r requirements.txt
+
+REM Try both possible filenames
+if exist requirements.txt (
+    pip install -r requirements.txt
+) else if exist requirements (
+    pip install -r requirements
+) else (
+    echo [ERROR] requirements.txt not found!
+    echo Please make sure you are in the browser_automator folder.
+    pause
+    exit /b 1
+)
 
 if errorlevel 1 (
     echo [ERROR] Failed to install dependencies
