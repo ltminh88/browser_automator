@@ -92,7 +92,7 @@ def run_query(platform: str, query: str, model: Optional[str] = None, deep_resea
     """Execute browser automation query synchronously."""
     driver = None
     try:
-        driver = get_driver(headless=True)  # Use headless for API
+        driver = get_driver(headless=False)  # Use visible browser for Mac compatibility
         
         if platform == "perplexity":
             automator = PerplexityAutomator(driver)
