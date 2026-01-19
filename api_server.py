@@ -91,15 +91,52 @@ def save_response(platform: str, query: str, response: str) -> str:
     
     return filepath
 
-def run_query(platform: str, query: str, model: Optional[str] = None, deep_research: bool = False) -> dict:
-    """Execute browser automation query synchronously."""
-    driver = None
+# --- Global Persistent Browser Session ---
+_persistent_driver = None
+
+def get_persistent_driver():
+    """Get or create a persistent browser driver that stays open."""
+    global _persistent_driver
+    if _persistent_driver is None:
+        print("[Browser] Creating new persistent browser session...")
+        _persistent_driver = get_driver(headless=False)
+    return _persistent_driver
+
+def reset_browser():
+    """Reset browser to home page for next query."""
+    global _persistent_driver
     try:
-        driver = get_driver(headless=False)  # Use visible browser for Mac compatibility
+        if _persistent_driver:
+            _persistent_driver.get("https://www.perplexity.ai/")
+            time.sleep(2)
+    except Exception as e:
+        print(f"[Browser] Reset failed, recreating driver: {e}")
+        close_persistent_driver()
+        _persistent_driver = get_driver(headless=False)
+
+def close_persistent_driver():
+    """Close the persistent driver (for cleanup)."""
+    global _persistent_driver
+    if _persistent_driver:
+        try:
+            _persistent_driver.quit()
+        except:
+            pass
+        _persistent_driver = None
+
+def run_query(platform: str, query: str, model: Optional[str] = None, deep_research: bool = False) -> dict:
+    """Execute browser automation query using persistent browser session."""
+    global _persistent_driver
+    
+    try:
+        driver = get_persistent_driver()
         
         if platform == "perplexity":
+            # Navigate to fresh page
+            driver.get("https://www.perplexity.ai/")
+            time.sleep(3)
+            
             automator = PerplexityAutomator(driver)
-            automator.navigate()
             
             if deep_research:
                 automator.enable_deep_research()
@@ -108,8 +145,9 @@ def run_query(platform: str, query: str, model: Optional[str] = None, deep_resea
                 automator.select_model(model)
                 
         elif platform == "gemini":
+            driver.get("https://gemini.google.com/")
+            time.sleep(3)
             automator = GeminiAutomator(driver)
-            automator.navigate()
         else:
             raise ValueError(f"Unknown platform: {platform}")
         
@@ -130,6 +168,13 @@ def run_query(platform: str, query: str, model: Optional[str] = None, deep_resea
         }
         
     except Exception as e:
+        print(f"[Browser] Query failed: {e}")
+        # Try to recover by resetting browser
+        try:
+            close_persistent_driver()
+        except:
+            pass
+        
         return {
             "success": False,
             "platform": platform,
@@ -139,12 +184,7 @@ def run_query(platform: str, query: str, model: Optional[str] = None, deep_resea
             "timestamp": int(time.time()),
             "error": str(e)
         }
-    finally:
-        if driver:
-            try:
-                driver.quit()
-            except:
-                pass
+    # NOTE: We do NOT close the driver here - it stays open for next request
 
 # --- Endpoints ---
 
