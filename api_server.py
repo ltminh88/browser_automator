@@ -4,6 +4,7 @@ FastAPI-based server for remote browser automation.
 """
 
 import asyncio
+import threading
 import time
 import os
 import sys
@@ -32,8 +33,10 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# --- Request Queue for Sequential Processing ---
-request_lock = asyncio.Lock()
+# --- Thread-safe Lock for Sequential Processing ---
+# threading.Lock() ensures only ONE browser session runs at a time
+browser_lock = threading.Lock()
+queue_count = 0  # Track pending requests
 
 # --- Pydantic Models ---
 class QueryRequest(BaseModel):
@@ -159,46 +162,69 @@ async def get_models(api_key: str = Depends(verify_api_key)):
 async def query_ai(request: QueryRequest, api_key: str = Depends(verify_api_key)):
     """
     Send a query to Perplexity or Gemini.
-    Requests are processed sequentially to avoid browser conflicts.
+    Requests are processed sequentially using threading.Lock to avoid browser conflicts.
     """
-    async with request_lock:
-        # Run in thread pool to avoid blocking
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            run_query,
-            request.platform,
-            request.query,
-            request.model,
-            False  # deep_research
-        )
-        
-        if not result["success"]:
-            raise HTTPException(status_code=500, detail=result.get("error", "Unknown error"))
-        
-        return QueryResponse(**result)
+    global queue_count
+    queue_count += 1
+    position = queue_count
+    print(f"[Queue] Request #{position} received: {request.query[:50]}...")
+    
+    def process_with_lock():
+        global queue_count
+        with browser_lock:
+            print(f"[Queue] Request #{position} - Acquired lock, processing...")
+            result = run_query(
+                request.platform,
+                request.query,
+                request.model,
+                False  # deep_research
+            )
+            print(f"[Queue] Request #{position} - Completed, releasing lock")
+            queue_count -= 1
+            return result
+    
+    # Run in executor with lock
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, process_with_lock)
+    
+    if not result["success"]:
+        raise HTTPException(status_code=500, detail=result.get("error", "Unknown error"))
+    
+    return QueryResponse(**result)
 
 @app.post("/deep-research", response_model=QueryResponse)
 async def deep_research(request: DeepResearchRequest, api_key: str = Depends(verify_api_key)):
     """
     Run Deep Research query on Perplexity.
     Automatically enables Deep Research mode.
+    Uses threading.Lock to ensure sequential processing.
     """
-    async with request_lock:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            run_query,
-            "perplexity",
-            request.query,
-            request.model,
-            True  # deep_research
-        )
-        
-        if not result["success"]:
-            raise HTTPException(status_code=500, detail=result.get("error", "Unknown error"))
-        
-        return QueryResponse(**result)
+    global queue_count
+    queue_count += 1
+    position = queue_count
+    print(f"[Queue] Deep Research #{position} received: {request.query[:50]}...")
+    
+    def process_with_lock():
+        global queue_count
+        with browser_lock:
+            print(f"[Queue] Deep Research #{position} - Acquired lock, processing...")
+            result = run_query(
+                "perplexity",
+                request.query,
+                request.model,
+                True  # deep_research
+            )
+            print(f"[Queue] Deep Research #{position} - Completed, releasing lock")
+            queue_count -= 1
+            return result
+    
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, process_with_lock)
+    
+    if not result["success"]:
+        raise HTTPException(status_code=500, detail=result.get("error", "Unknown error"))
+    
+    return QueryResponse(**result)
 
 # --- Main Entry Point ---
 if __name__ == "__main__":
