@@ -23,24 +23,47 @@ class PerplexityAutomator(BaseAutomator):
         time.sleep(3) # Initial load wait
 
     def query(self, text: str):
-        # Wait for input area
-        input_selector = PERPLEXITY_SELECTORS["input_area"]
-        print(f"Waiting for input area: {input_selector}")
-        input_el = self.wait_for_element(input_selector)
-        
-        print("Typing query...")
-        input_el.click()
-        input_el.clear()
-        
-        # Type slowly to simulate human behavior
-        for char in text:
-            input_el.send_keys(char)
-            time.sleep(0.05)
-        
-        time.sleep(0.5)
-        input_el.send_keys(Keys.RETURN)
-        print("Query submitted.")
-        time.sleep(5) # Wait for generation to start
+        """Query with retry logic for stale element handling."""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Wait for input area - refind each time to avoid stale reference
+                input_selector = PERPLEXITY_SELECTORS["input_area"]
+                print(f"Waiting for input area: {input_selector} (attempt {attempt + 1})")
+                
+                # Wait a bit for page to stabilize after model selection
+                time.sleep(2)
+                
+                input_el = self.wait_for_element(input_selector)
+                
+                print("Typing query...")
+                input_el.click()
+                time.sleep(0.5)
+                
+                # Clear any existing text
+                try:
+                    input_el.clear()
+                except:
+                    pass
+                
+                # Type slowly to simulate human behavior
+                for char in text:
+                    input_el.send_keys(char)
+                    time.sleep(0.03)
+                
+                time.sleep(0.5)
+                input_el.send_keys(Keys.RETURN)
+                print("Query submitted.")
+                time.sleep(5)  # Wait for generation to start
+                return  # Success - exit the retry loop
+                
+            except Exception as e:
+                print(f"Query attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    print("Retrying...")
+                    time.sleep(2)
+                else:
+                    raise e
 
     def select_model(self, model_name: str):
         """
@@ -75,9 +98,12 @@ class PerplexityAutomator(BaseAutomator):
             
             if not found:
                 print(f"Model '{model_name}' not found in available options.")
-                # Optional: Close menu by clicking background or just ignore
+                # Close menu by pressing Escape
+                from selenium.webdriver.common.keys import Keys
+                self.driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
             else:
-                time.sleep(1) # Wait for selection to apply
+                print("Model selected, waiting for page to stabilize...")
+                time.sleep(3)  # Wait longer for selection to apply and page to update
                 
         except Exception as e:
             print(f"Failed to select model '{model_name}': {e}")
