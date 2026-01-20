@@ -93,20 +93,51 @@ def save_response(platform: str, query: str, response: str) -> str:
 
 # --- Global Persistent Browser Session ---
 _persistent_driver = None
+_request_count = 0
+_max_requests_before_refresh = 10  # Refresh browser every N requests
+
+def is_driver_alive():
+    """Check if the driver is still functional."""
+    global _persistent_driver
+    if _persistent_driver is None:
+        return False
+    try:
+        # Try to get current URL - will fail if browser is closed
+        _ = _persistent_driver.current_url
+        return True
+    except Exception:
+        return False
 
 def get_persistent_driver():
     """Get or create a persistent browser driver that stays open."""
-    global _persistent_driver
+    global _persistent_driver, _request_count
+    
+    # Check if we need to refresh driver
+    if _request_count >= _max_requests_before_refresh:
+        print(f"[Browser] Refreshing browser after {_request_count} requests...")
+        close_persistent_driver()
+        _request_count = 0
+    
+    # Check if existing driver is still alive
+    if _persistent_driver is not None and not is_driver_alive():
+        print("[Browser] Driver is dead, recreating...")
+        close_persistent_driver()
+    
     if _persistent_driver is None:
         print("[Browser] Creating new persistent browser session...")
-        _persistent_driver = get_driver(headless=False)
+        try:
+            _persistent_driver = get_driver(headless=False)
+        except Exception as e:
+            print(f"[Browser] Failed to initialize driver: {e}")
+            raise e
+    
     return _persistent_driver
 
 def reset_browser():
     """Reset browser to home page for next query."""
     global _persistent_driver
     try:
-        if _persistent_driver:
+        if _persistent_driver and is_driver_alive():
             _persistent_driver.get("https://www.perplexity.ai/")
             time.sleep(2)
     except Exception as e:
@@ -126,7 +157,10 @@ def close_persistent_driver():
 
 def run_query(platform: str, query: str, model: Optional[str] = None, deep_research: bool = False) -> dict:
     """Execute browser automation query using persistent browser session."""
-    global _persistent_driver
+    global _persistent_driver, _request_count
+    
+    _request_count += 1
+    print(f"[Browser] Request #{_request_count} starting...")
     
     try:
         driver = get_persistent_driver()
