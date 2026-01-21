@@ -23,7 +23,16 @@ class PerplexityAutomator(BaseAutomator):
         time.sleep(3) # Initial load wait
 
     def query(self, text: str):
-        """Query with retry logic for stale element handling."""
+        """
+        Query with retry logic and improved text input.
+        Sanitizes text and sends entire string at once to prevent splitting.
+        """
+        # Sanitize the text - remove newlines and normalize whitespace
+        clean_text = text.replace('\n', ' ').replace('\r', ' ')
+        clean_text = ' '.join(clean_text.split())  # Normalize multiple spaces
+        
+        print(f"[Perplexity] Prompt length: {len(clean_text)} chars")
+        
         max_retries = 3
         for attempt in range(max_retries):
             try:
@@ -36,7 +45,7 @@ class PerplexityAutomator(BaseAutomator):
                 
                 input_el = self.wait_for_element(input_selector)
                 
-                print("Typing query...")
+                print("Inputting query...")
                 input_el.click()
                 time.sleep(0.5)
                 
@@ -46,10 +55,8 @@ class PerplexityAutomator(BaseAutomator):
                 except:
                     pass
                 
-                # Type slowly to simulate human behavior
-                for char in text:
-                    input_el.send_keys(char)
-                    time.sleep(0.03)
+                # Send entire text at once (NOT char by char) to prevent splitting
+                input_el.send_keys(clean_text)
                 
                 time.sleep(0.5)
                 input_el.send_keys(Keys.RETURN)

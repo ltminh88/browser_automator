@@ -39,26 +39,56 @@ class GeminiAutomator(BaseAutomator):
                 print("Timeout waiting for login.")
 
     def query(self, text: str):
+        """
+        Submit a query to Gemini.
+        Uses clipboard paste to prevent prompt from being split into multiple messages.
+        """
+        # Sanitize the text - remove newlines and normalize whitespace
+        clean_text = text.replace('\n', ' ').replace('\r', ' ')
+        clean_text = ' '.join(clean_text.split())  # Normalize multiple spaces
+        
+        print(f"[Gemini] Prompt length: {len(clean_text)} chars")
+        
         # Wait for input
         input_selector = GEMINI_SELECTORS["input_area"]
         print(f"Waiting for input area: {input_selector}")
         try:
             input_el = self.wait_for_element(input_selector)
         except:
-             print("Could not find input area. Are you logged in?")
-             return
+            print("Could not find input area. Are you logged in?")
+            return
 
         print("Typing query...")
         input_el.click()
-        # ContentEditable divs can't always be cleared with clear(). 
-        # But usually start empty for new chat.
+        time.sleep(0.5)
         
-        for char in text:
-            input_el.send_keys(char)
-            time.sleep(0.02)
+        # Method 1: Use JavaScript to set the value directly (for contenteditable)
+        # This prevents character-by-character issues
+        try:
+            # For contenteditable divs, we need to set innerHTML or textContent
+            self.driver.execute_script("""
+                var element = arguments[0];
+                var text = arguments[1];
+                
+                // Clear existing content
+                element.innerHTML = '';
+                
+                // Set the text content
+                element.textContent = text;
+                
+                // Trigger input event so Gemini recognizes the change
+                var event = new Event('input', { bubbles: true });
+                element.dispatchEvent(event);
+            """, input_el, clean_text)
+            print("[Gemini] Text injected via JavaScript")
+        except Exception as e:
+            print(f"[Gemini] JavaScript injection failed: {e}, falling back to send_keys")
+            # Fallback: send the entire text at once (not char by char)
+            input_el.send_keys(clean_text)
             
         time.sleep(0.5)
-        # Often Gemini needs the send button clicked or Enter.
+        
+        # Submit with Enter key
         input_el.send_keys(Keys.RETURN)
         print("Query submitted.")
         time.sleep(5)
