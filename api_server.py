@@ -24,7 +24,7 @@ from api_config import API_KEY, AVAILABLE_MODELS
 from drivers.factory import get_driver
 from automators.perplexity import PerplexityAutomator
 from automators.gemini import GeminiAutomator
-from config import DATA_DIR
+from config import DATA_DIR, USER_DATA_DIR
 
 # --- FastAPI App ---
 app = FastAPI(
@@ -32,6 +32,43 @@ app = FastAPI(
     description="API for querying Perplexity and Gemini via browser automation",
     version="1.0.0"
 )
+
+@app.on_event("startup")
+async def startup_event():
+    """Cleanup and warmup browser on server start."""
+    import subprocess
+    print("[Startup] Cleaning up stale Chrome processes...")
+    try:
+        subprocess.run(['pkill', '-9', '-f', 'chromedriver'], capture_output=True, timeout=5)
+    except:
+        pass
+    # Remove profile locks
+    lock_files = [
+        os.path.expanduser('~/.browser_automator_profile/SingletonLock'),
+        os.path.expanduser('~/.browser_automator_profile/SingletonCookie'),
+        os.path.expanduser('~/.browser_automator_profile/SingletonSocket'),
+    ]
+    for lock_file in lock_files:
+        try:
+            if os.path.exists(lock_file):
+                os.remove(lock_file)
+                print(f"[Startup] Removed lock: {lock_file}")
+        except:
+            pass
+    print("[Startup] Ready to accept requests")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup browser on server shutdown."""
+    global _persistent_driver
+    print("[Shutdown] Closing browser...")
+    if _persistent_driver:
+        try:
+            _persistent_driver.quit()
+        except:
+            pass
+        _persistent_driver = None
+    print("[Shutdown] Complete")
 
 # --- Thread-safe Lock for Sequential Processing ---
 # threading.Lock() ensures only ONE browser session runs at a time
@@ -43,10 +80,12 @@ class QueryRequest(BaseModel):
     platform: str = "perplexity"  # "perplexity" or "gemini"
     query: str
     model: Optional[str] = None
+    reasoning: Optional[bool] = False  # Enable "With reasoning" mode
 
 class DeepResearchRequest(BaseModel):
     query: str
     model: Optional[str] = None
+    reasoning: Optional[bool] = False  # Enable "With reasoning" mode
 
 class QueryResponse(BaseModel):
     success: bool
@@ -108,6 +147,50 @@ def is_driver_alive():
     except Exception:
         return False
 
+def kill_zombie_chrome_processes():
+    """Kill any zombie Chrome/chromedriver processes that might be blocking."""
+    import subprocess
+    import platform
+    
+    if platform.system() == 'Darwin':  # macOS
+        processes_to_kill = [
+            "chromedriver",
+            # Don't kill all Chrome - only the ones from user-data-dir
+        ]
+        for proc in processes_to_kill:
+            try:
+                subprocess.run(['pkill', '-9', '-f', proc], 
+                             capture_output=True, timeout=5)
+            except:
+                pass
+    elif platform.system() == 'Windows':
+        try:
+            subprocess.run(['taskkill', '/F', '/IM', 'chromedriver.exe'], 
+                         capture_output=True, timeout=5)
+        except:
+            pass
+
+def cleanup_profile_locks():
+    """Remove lock files from Chrome profile that might prevent new sessions."""
+    import shutil
+    
+    lock_files = [
+        os.path.join(USER_DATA_DIR, 'SingletonLock'),
+        os.path.join(USER_DATA_DIR, 'SingletonCookie'),
+        os.path.join(USER_DATA_DIR, 'SingletonSocket'),
+    ]
+    
+    for lock_file in lock_files:
+        try:
+            if os.path.exists(lock_file):
+                if os.path.isdir(lock_file):
+                    shutil.rmtree(lock_file, ignore_errors=True)
+                else:
+                    os.remove(lock_file)
+                print(f"[Browser] Removed lock file: {lock_file}")
+        except Exception as e:
+            print(f"[Browser] Could not remove lock {lock_file}: {e}")
+
 def get_persistent_driver():
     """Get or create a persistent browser driver that stays open."""
     global _persistent_driver, _request_count
@@ -125,11 +208,28 @@ def get_persistent_driver():
     
     if _persistent_driver is None:
         print("[Browser] Creating new persistent browser session...")
-        try:
-            _persistent_driver = get_driver(headless=False)
-        except Exception as e:
-            print(f"[Browser] Failed to initialize driver: {e}")
-            raise e
+        
+        # Try multiple times with cleanup between attempts
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                _persistent_driver = get_driver(headless=False)
+                print(f"[Browser] Driver created successfully on attempt {attempt + 1}")
+                return _persistent_driver
+            except Exception as e:
+                print(f"[Browser] Attempt {attempt + 1} failed: {e}")
+                
+                if attempt < max_retries - 1:
+                    print("[Browser] Cleaning up and retrying...")
+                    # Kill zombie processes
+                    kill_zombie_chrome_processes()
+                    # Clean up profile locks
+                    cleanup_profile_locks()
+                    # Wait before retry
+                    time.sleep(3)
+                else:
+                    print("[Browser] All attempts failed, raising error")
+                    raise e
     
     return _persistent_driver
 
@@ -143,7 +243,7 @@ def reset_browser():
     except Exception as e:
         print(f"[Browser] Reset failed, recreating driver: {e}")
         close_persistent_driver()
-        _persistent_driver = get_driver(headless=False)
+        _persistent_driver = get_persistent_driver()
 
 def close_persistent_driver():
     """Close the persistent driver (for cleanup)."""
@@ -154,8 +254,12 @@ def close_persistent_driver():
         except:
             pass
         _persistent_driver = None
+    
+    # Clean up any lingering processes
+    kill_zombie_chrome_processes()
+    time.sleep(1)  # Give time for processes to die
 
-def run_query(platform: str, query: str, model: Optional[str] = None, deep_research: bool = False) -> dict:
+def run_query(platform: str, query: str, model: Optional[str] = None, deep_research: bool = False, reasoning: bool = False) -> dict:
     """Execute browser automation query using persistent browser session."""
     global _persistent_driver, _request_count
     
@@ -176,7 +280,10 @@ def run_query(platform: str, query: str, model: Optional[str] = None, deep_resea
                 automator.enable_deep_research()
                 
             if model:
-                automator.select_model(model)
+                automator.select_model(model, enable_reasoning=reasoning)
+            elif reasoning:
+                # If no model specified but reasoning requested, toggle reasoning on current model
+                automator.toggle_reasoning(enable=True)
                 
         elif platform == "gemini":
             driver.get("https://gemini.google.com/")
@@ -251,7 +358,8 @@ async def query_ai(request: QueryRequest, api_key: str = Depends(verify_api_key)
                 request.platform,
                 request.query,
                 request.model,
-                False  # deep_research
+                False,  # deep_research
+                request.reasoning  # reasoning mode
             )
             print(f"[Queue] Request #{position} - Completed, releasing lock")
             queue_count -= 1
