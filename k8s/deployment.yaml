@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: browser-automator
+  namespace: minhlt-private
+  labels:
+    app: browser-automator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: browser-automator
+  template:
+    metadata:
+      labels:
+        app: browser-automator
+    spec:
+      containers:
+      - name: browser-automator
+        image: ghcr.io/ltminh88/browser_automator:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: BROWSER_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: browser-automator-secrets
+              key: api-key
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: DISPLAY
+          value: ":99"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        volumeMounts:
+        - name: chrome-profile
+          mountPath: /app/chrome_profile
+        - name: data
+          mountPath: /app/data
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+      volumes:
+      - name: chrome-profile
+        emptyDir: {}
+      - name: data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: browser-automator
+  namespace: minhlt-private
+spec:
+  selector:
+    app: browser-automator
+  ports:
+  - port: 8000
+    targetPort: 8000
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: browser-automator-secrets
+  namespace: minhlt-private
+type: Opaque
+stringData:
+  api-key: "CHANGE_ME_TO_YOUR_API_KEY"

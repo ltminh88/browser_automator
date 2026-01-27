@@ -1,0 +1,143 @@
+name: Build & Deploy to K8s
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # Cho phép trigger manual
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  K8S_NAMESPACE: minhlt-private
+
+jobs:
+  # =============================================================================
+  # BUILD & TEST
+  # =============================================================================
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check Python syntax
+        run: |
+          python -m py_compile main.py api_server.py
+          python -m py_compile automators/*.py
+          echo "✅ Syntax check passed"
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Test container health
+        run: |
+          # Pull and run container
+          docker run -d --name test-container \
+            -e BROWSER_API_KEY=test-key \
+            -p 8000:8000 \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+          # Wait for startup
+          echo "Waiting for container to start..."
+          sleep 15
+
+          # Health check
+          if curl -sf http://localhost:8000/health; then
+            echo "✅ Health check passed"
+          else
+            echo "❌ Health check failed"
+            docker logs test-container
+            exit 1
+          fi
+
+          # Cleanup
+          docker stop test-container
+
+  # =============================================================================
+  # DEPLOY TO K8S
+  # =============================================================================
+  deploy:
+    name: Deploy to K8s
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Update image in deployment
+        run: |
+          # Update image tag in deployment.yaml
+          sed -i "s|image: .*browser-automator.*|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g" k8s/deployment.yaml
+
+      - name: Apply Kubernetes manifests
+        run: |
+          kubectl apply -f k8s/deployment.yaml
+          echo "✅ Manifests applied"
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/browser-automator \
+            -n ${{ env.K8S_NAMESPACE }} \
+            --timeout=120s
+          echo "✅ Rollout completed"
+
+      - name: Show deployment status
+        run: |
+          echo "=== Pods ==="
+          kubectl get pods -n ${{ env.K8S_NAMESPACE }} -l app=browser-automator
+          echo ""
+          echo "=== Service ==="
+          kubectl get svc -n ${{ env.K8S_NAMESPACE }} -l app=browser-automator
+
+      - name: Notify success
+        if: success()
+        run: |
+          echo "🚀 Deployment successful!"
+          echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          echo "Namespace: ${{ env.K8S_NAMESPACE }}"
