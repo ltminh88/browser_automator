@@ -152,7 +152,7 @@ def kill_zombie_chrome_processes():
     import subprocess
     import platform
     
-    if platform.system() == 'Darwin':  # macOS
+    if platform.system() in ('Darwin', 'Linux'):  # macOS or Linux (container)
         processes_to_kill = [
             "chromedriver",
             # Don't kill all Chrome - only the ones from user-data-dir

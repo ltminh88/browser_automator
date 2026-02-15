@@ -10,9 +10,20 @@ if parent_dir not in sys.path:
 import undetected_chromedriver as uc
 from config import USER_DATA_DIR
 
+
+def is_container():
+    """Detect if running inside a container (Docker/Podman)."""
+    return (
+        os.path.exists('/.dockerenv') or
+        os.environ.get('container') == 'podman' or
+        os.environ.get('RUN_MODE') is not None
+    )
+
+
 def get_driver(headless=False, use_profile=True):
     """
     Returns a configured Chrome driver instance.
+    Automatically detects container environment and adds necessary flags.
     
     Args:
         headless (bool): Whether to run in headless mode. 
@@ -30,11 +41,18 @@ def get_driver(headless=False, use_profile=True):
     options.add_argument("--no-service-autorun")
     options.add_argument("--password-store=basic")
     
-    # undetected-chromedriver handles headless mode internally if we pass headless=True to the Chrome() constructor,
-    # but sometimes explicit flags helper.
-    # However, uc.Chrome(headless=True) is the recommended way.
+    # Container-specific flags
+    if is_container() or os.environ.get('CHROME_NO_SANDBOX'):
+        print("[Driver] Container environment detected, adding sandbox flags...")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--disable-setuid-sandbox")
+        options.add_argument("--disable-extensions")
+        # Use the system Chrome in container instead of downloading
+        options.binary_location = "/usr/bin/google-chrome-stable"
     
-    print(f"Initializing Chrome Driver (Headless: {headless})...")
+    print(f"Initializing Chrome Driver (Headless: {headless}, Container: {is_container()})...")
     try:
         driver = uc.Chrome(options=options, headless=headless, use_subprocess=True)
         return driver

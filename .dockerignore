@@ -1,0 +1,38 @@
+# Chrome profile (mounted as volume)
+chrome_profile/
+
+# Response data (mounted as volume)
+data/
+
+# Git
+.git/
+.gitignore
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docs (not needed in container)
+*.md
+!requirements.txt
+
+# Batch scripts (Windows only)
+*.bat
+
+# Debug/test files
+debug_*.py
+test_*.sh

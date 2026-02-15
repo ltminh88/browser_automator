@@ -1,0 +1,75 @@
+version: "3.8"
+
+# ============================================================
+# Browser Automator - Container Compose
+# Compatible with both: podman-compose / docker compose
+# ============================================================
+# 
+# Quick Start:
+#   1. Setup (login to Perplexity/Gemini):
+#      podman-compose run --rm -p 6080:6080 setup
+#      # or: docker compose run --rm -p 6080:6080 setup
+#
+#   2. Run server:
+#      podman-compose up -d server
+#      # or: docker compose up -d server
+#
+#   3. Test:
+#      curl http://localhost:8000/health
+# ============================================================
+
+services:
+  # ----------------------------------------------------------
+  # SETUP MODE: Login to Perplexity/Gemini via browser
+  # ----------------------------------------------------------
+  setup:
+    build: .
+    environment:
+      - RUN_MODE=setup
+      - VNC_PASSWORD=browser123
+      - NOVNC_PORT=6080
+    ports:
+      - "6080:6080"    # noVNC web interface
+      - "5900:5900"    # VNC port (optional)
+    volumes:
+      - chrome_profile:/app/chrome_profile
+    shm_size: "2gb"
+    # No restart - run once to login
+
+  # ----------------------------------------------------------
+  # SERVER MODE: Run the API server
+  # ----------------------------------------------------------
+  server:
+    build: .
+    environment:
+      - RUN_MODE=server
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - BROWSER_API_KEY=${BROWSER_API_KEY:-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}
+      # Set ENABLE_VNC=true for remote debugging
+      - ENABLE_VNC=${ENABLE_VNC:-false}
+      - VNC_PASSWORD=${VNC_PASSWORD:-browser123}
+    ports:
+      - "${API_PORT:-8000}:8000"
+      # VNC ports (only used when ENABLE_VNC=true)
+      - "6080:6080"
+      - "5900:5900"
+    volumes:
+      - chrome_profile:/app/chrome_profile
+      - response_data:/app/data
+    shm_size: "2gb"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  # Persistent Chrome profile (contains login sessions)
+  chrome_profile:
+    name: browser_automator_chrome_profile
+  # Response data
+  response_data:
+    name: browser_automator_data
