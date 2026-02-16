@@ -185,13 +185,26 @@ class PerplexityAutomator(BaseAutomator):
             
             target_model = model_name.lower()
             found = False
+            need_thinking = False
+            
+            # Check if model name contains "Thinking" — Perplexity shows "Thinking" 
+            # as a separate menu item, not combined with model names
+            if 'thinking' in target_model:
+                base_model = target_model.replace('thinking', '').strip()
+                need_thinking = True
+                print(f"Model '{model_name}' contains 'Thinking' -> will select base model '{base_model}' + click 'Thinking' item")
+            else:
+                base_model = target_model
             
             # Log all available models for debugging
             print(f"Available models: {[item.text for item in items if item.text.strip()]}")
             
             for item in items:
-                item_text = item.text.lower()
-                if target_model in item_text:
+                item_text = item.text.lower().strip()
+                if base_model in item_text or item_text in base_model:
+                    # Skip the "Thinking" item itself when looking for base model
+                    if item_text == 'thinking':
+                        continue
                     print(f"Found matching model: '{item.text}' -> Click")
                     # Scroll to item and click
                     self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", item)
@@ -201,14 +214,75 @@ class PerplexityAutomator(BaseAutomator):
                     break
             
             if not found:
-                print(f"Model '{model_name}' not found in available options.")
+                print(f"Model '{model_name}' (base: '{base_model}') not found in available options.")
                 self.driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
             else:
                 print("Model selected, waiting for page to stabilize...")
                 time.sleep(2)
                 
-                # Toggle reasoning if requested
-                if enable_reasoning:
+                # If model name had "Thinking", click the separate Thinking menu item
+                if need_thinking:
+                    print("Now selecting 'Thinking' mode from menu...")
+                    # Re-find the menu button (old reference may be stale after model selection)
+                    reopen_btn = None
+                    for selector in menu_selectors:
+                        try:
+                            if selector.startswith("//"):
+                                elements = self.driver.find_elements(By.XPATH, selector)
+                            else:
+                                elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                            for elem in elements:
+                                if elem.is_displayed():
+                                    reopen_btn = elem
+                                    break
+                            if reopen_btn:
+                                break
+                        except:
+                            continue
+                    
+                    if not reopen_btn:
+                        print("Warning: Could not re-find model menu button for Thinking selection")
+                        self.toggle_reasoning(enable=True)
+                    else:
+                        reopen_btn.click()
+                        time.sleep(2)
+                    
+                    # Re-fetch menu items and find "Thinking"
+                    thinking_found = False
+                    for selector in item_selectors:
+                        try:
+                            if selector.startswith("//"):
+                                items = self.driver.find_elements(By.XPATH, selector)
+                            else:
+                                items = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                            if items:
+                                break
+                        except:
+                            continue
+                    
+                    re_items = [item.text for item in items if item.text.strip()] if items else []
+                    print(f"Re-opened menu items: {re_items}")
+                    
+                    for item in items:
+                        if item.text.lower().strip() == 'thinking':
+                            print(f"Found 'Thinking' item -> Click")
+                            self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", item)
+                            time.sleep(0.3)
+                            item.click()
+                            thinking_found = True
+                            break
+                    
+                    if not thinking_found:
+                        print("Warning: 'Thinking' item not found in menu, trying toggle_reasoning fallback")
+                        self.driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
+                        time.sleep(0.5)
+                        self.toggle_reasoning(enable=True)
+                    else:
+                        print("Thinking mode selected, waiting for page to stabilize...")
+                        time.sleep(2)
+                
+                # Toggle reasoning if requested (and not already handled by Thinking)
+                elif enable_reasoning:
                     self.toggle_reasoning(enable=True)
                 
         except Exception as e:
@@ -371,54 +445,125 @@ class PerplexityAutomator(BaseAutomator):
     def extract_response(self) -> str:
         """
         Extract the response from Perplexity.
-        Waits for generation to complete with polling.
+        Waits for generation to complete using multiple signals:
+        1. UI completion indicators (Copy/Share buttons, Stop button gone)
+        2. Text content stability over multiple consecutive polls
+        3. Follow-up input area appearing
         """
         print("Waiting for response generation...")
         
-        # Poll for response completion - max 60 seconds
-        max_wait = 60
+        max_wait = 180  # 3 minutes max for long responses
         poll_interval = 3
         waited = 0
         last_text = ""
         stable_count = 0
+        required_stable = 3  # Need 3 consecutive stable polls (9s of no change)
         
         while waited < max_wait:
             time.sleep(poll_interval)
             waited += poll_interval
             
+            # Check for UI completion signals via JavaScript
+            try:
+                completion_signals = self.driver.execute_script("""
+                    var result = {isGenerating: false, hasCopyBtn: false, hasShareBtn: false};
+                    
+                    // Stop button visible = still generating
+                    var stopBtns = document.querySelectorAll('button[aria-label="Stop"], button[aria-label="Cancel"]');
+                    for (var i = 0; i < stopBtns.length; i++) {
+                        if (stopBtns[i].offsetParent !== null) {
+                            result.isGenerating = true;
+                            break;
+                        }
+                    }
+                    
+                    // Streaming animation/cursor = still generating
+                    var cursors = document.querySelectorAll('.animate-pulse, .streaming-cursor, [class*="cursor"][class*="blink"], .animate-spin');
+                    for (var i = 0; i < cursors.length; i++) {
+                        if (cursors[i].offsetParent !== null) {
+                            result.isGenerating = true;
+                            break;
+                        }
+                    }
+                    
+                    // Copy button visible = generation complete
+                    var copyBtns = document.querySelectorAll('button[aria-label="Copy"], button[aria-label="Copy Answer"], button[aria-label="Copy to clipboard"]');
+                    for (var i = 0; i < copyBtns.length; i++) {
+                        if (copyBtns[i].offsetParent !== null) {
+                            result.hasCopyBtn = true;
+                            break;
+                        }
+                    }
+                    
+                    // Share button visible = generation complete
+                    var shareBtns = document.querySelectorAll('button[aria-label="Share"], button[aria-label="Share Answer"]');
+                    for (var i = 0; i < shareBtns.length; i++) {
+                        if (shareBtns[i].offsetParent !== null) {
+                            result.hasShareBtn = true;
+                            break;
+                        }
+                    }
+                    
+                    return result;
+                """)
+            except Exception as e:
+                print(f"JS completion check failed: {e}")
+                completion_signals = {"isGenerating": True, "hasCopyBtn": False, "hasShareBtn": False}
+            
+            # Extract current text
             soup = self.get_soup()
             containers = soup.select(PERPLEXITY_SELECTORS["response_container"])
             
-            if containers:
-                current_text = containers[-1].get_text(separator="\n", strip=True)
-                
-                # Check if response has stabilized (same text for 2 consecutive polls)
-                if current_text and current_text == last_text:
-                    stable_count += 1
-                    if stable_count >= 2:
-                        print(f"Response stabilized after {waited} seconds")
-                        return current_text
-                else:
-                    stable_count = 0
-                    last_text = current_text
-                
-                # Check for "thinking" or "processing" indicators
-                # If found, keep waiting
-                if 'thinking' in current_text.lower() or 'processing' in current_text.lower():
-                    print(f"Still generating... ({waited}s)")
-                    continue
-                
-                # If we have content and no indicators, return after a brief extra wait
-                if current_text and len(current_text) > 50:
-                    time.sleep(2)  # Small extra wait for final updates
-                    soup = self.get_soup()
-                    containers = soup.select(PERPLEXITY_SELECTORS["response_container"])
-                    if containers:
-                        return containers[-1].get_text(separator="\n", strip=True)
+            if not containers:
+                print(f"Waiting for response containers... ({waited}s/{max_wait}s)")
+                continue
             
-            print(f"Waiting for response... ({waited}s/{max_wait}s)")
+            current_text = containers[-1].get_text(separator="\n", strip=True)
+            
+            if not current_text:
+                print(f"Empty response, waiting... ({waited}s/{max_wait}s)")
+                continue
+            
+            text_len = len(current_text)
+            is_generating = completion_signals.get("isGenerating", False)
+            has_copy = completion_signals.get("hasCopyBtn", False)
+            has_share = completion_signals.get("hasShareBtn", False)
+            
+            # Strong completion signal: Copy or Share button appeared
+            if (has_copy or has_share) and text_len > 50:
+                print(f"UI completion signal detected (copy={has_copy}, share={has_share}) at {waited}s, {text_len} chars")
+                # Final re-fetch for most up-to-date content
+                time.sleep(1)
+                soup = self.get_soup()
+                containers = soup.select(PERPLEXITY_SELECTORS["response_container"])
+                if containers:
+                    final_text = containers[-1].get_text(separator="\n", strip=True)
+                    print(f"Returning response: {len(final_text)} chars")
+                    return final_text
+                return current_text
+            
+            # Stop button present = definitely still generating, reset stability
+            if is_generating:
+                print(f"Still generating... ({waited}s, {text_len} chars)")
+                last_text = current_text
+                stable_count = 0
+                continue
+            
+            # Text stability check (fallback when UI signals aren't detected)
+            if current_text == last_text:
+                stable_count += 1
+                if stable_count >= required_stable and text_len > 50:
+                    print(f"Response stabilized after {waited}s ({text_len} chars, {stable_count} stable polls)")
+                    return current_text
+                else:
+                    print(f"Text stable ({stable_count}/{required_stable})... ({waited}s, {text_len} chars)")
+            else:
+                stable_count = 0
+                last_text = current_text
+                print(f"Text still changing... ({waited}s, {text_len} chars)")
         
         # Final attempt after max wait
+        print(f"Max wait reached ({max_wait}s), extracting final response...")
         soup = self.get_soup()
         containers = soup.select(PERPLEXITY_SELECTORS["response_container"])
         
@@ -427,4 +572,5 @@ class PerplexityAutomator(BaseAutomator):
             return ""
         
         latest_answer = containers[-1].get_text(separator="\n", strip=True)
+        print(f"Final response: {len(latest_answer)} chars")
         return latest_answer
