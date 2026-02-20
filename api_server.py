@@ -155,7 +155,7 @@ def kill_zombie_chrome_processes():
     if platform.system() in ('Darwin', 'Linux'):  # macOS or Linux (container)
         processes_to_kill = [
             "chromedriver",
-            # Don't kill all Chrome - only the ones from user-data-dir
+            "chrome.*user-data-dir",  # Kill Chrome processes using our profile
         ]
         for proc in processes_to_kill:
             try:
@@ -226,7 +226,7 @@ def get_persistent_driver():
                     # Clean up profile locks
                     cleanup_profile_locks()
                     # Wait before retry
-                    time.sleep(3)
+                    time.sleep(5)
                 else:
                     print("[Browser] All attempts failed, raising error")
                     raise e
@@ -257,74 +257,91 @@ def close_persistent_driver():
     
     # Clean up any lingering processes
     kill_zombie_chrome_processes()
-    time.sleep(1)  # Give time for processes to die
+    time.sleep(3)  # Give time for Chrome to fully exit
 
 def run_query(platform: str, query: str, model: Optional[str] = None, deep_research: bool = False, reasoning: bool = False) -> dict:
-    """Execute browser automation query using persistent browser session."""
+    """Execute browser automation query using persistent browser session with auto-retry."""
     global _persistent_driver, _request_count
     
     _request_count += 1
-    print(f"[Browser] Request #{_request_count} starting...")
+    max_query_retries = 2
+    last_error = None
     
-    try:
-        driver = get_persistent_driver()
+    for attempt in range(max_query_retries):
+        attempt_num = attempt + 1
+        print(f"[Browser] Request #{_request_count} attempt {attempt_num}/{max_query_retries} starting...")
         
-        if platform == "perplexity":
-            # Navigate to fresh page
-            driver.get("https://www.perplexity.ai/")
-            time.sleep(3)
-            
-            automator = PerplexityAutomator(driver)
-            
-            if deep_research:
-                automator.enable_deep_research()
-                
-            if model:
-                automator.select_model(model, enable_reasoning=reasoning)
-            elif reasoning:
-                # If no model specified but reasoning requested, toggle reasoning on current model
-                automator.toggle_reasoning(enable=True)
-                
-        elif platform == "gemini":
-            driver.get("https://gemini.google.com/")
-            time.sleep(3)
-            automator = GeminiAutomator(driver)
-        else:
-            raise ValueError(f"Unknown platform: {platform}")
-        
-        automator.query(query)
-        response = automator.extract_response()
-        
-        # Save to file
-        file_path = save_response(platform, query, response)
-        
-        return {
-            "success": True,
-            "platform": platform,
-            "query": query,
-            "model": model,
-            "response": response,
-            "timestamp": int(time.time()),
-            "file_path": file_path
-        }
-        
-    except Exception as e:
-        print(f"[Browser] Query failed: {e}")
-        # Try to recover by resetting browser
         try:
-            close_persistent_driver()
-        except:
-            pass
-        
-        return {
-            "success": False,
-            "platform": platform,
-            "query": query,
-            "model": model,
-            "response": "",
-            "timestamp": int(time.time()),
-            "error": str(e)
-        }
+            driver = get_persistent_driver()
+            
+            if platform == "perplexity":
+                # Navigate to fresh page
+                driver.get("https://www.perplexity.ai/")
+                time.sleep(3)
+                
+                automator = PerplexityAutomator(driver)
+                
+                if deep_research:
+                    automator.enable_deep_research()
+                    
+                if model:
+                    automator.select_model(model, enable_reasoning=reasoning)
+                elif reasoning:
+                    # If no model specified but reasoning requested, toggle reasoning on current model
+                    automator.toggle_reasoning(enable=True)
+                    
+            elif platform == "gemini":
+                driver.get("https://gemini.google.com/")
+                time.sleep(3)
+                automator = GeminiAutomator(driver)
+            else:
+                raise ValueError(f"Unknown platform: {platform}")
+            
+            automator.query(query)
+            response = automator.extract_response()
+            
+            # Save to file
+            file_path = save_response(platform, query, response)
+            
+            if attempt > 0:
+                print(f"[Browser] Request #{_request_count} succeeded after retry (attempt {attempt_num})")
+            
+            return {
+                "success": True,
+                "platform": platform,
+                "query": query,
+                "model": model,
+                "response": response,
+                "timestamp": int(time.time()),
+                "file_path": file_path
+            }
+            
+        except Exception as e:
+            last_error = e
+            print(f"[Browser] Query attempt {attempt_num} failed: {e}")
+            
+            # Recovery: close driver and kill zombie processes
+            try:
+                close_persistent_driver()
+            except:
+                pass
+            
+            if attempt < max_query_retries - 1:
+                print(f"[Browser] Waiting 5s before retry...")
+                time.sleep(5)  # Wait for Chrome to fully exit before retry
+                continue
+    
+    # All retries exhausted — return clean error message
+    print(f"[Browser] Request #{_request_count} failed after {max_query_retries} attempts")
+    return {
+        "success": False,
+        "platform": platform,
+        "query": query,
+        "model": model,
+        "response": "",
+        "timestamp": int(time.time()),
+        "error": f"Browser session crashed and could not recover after {max_query_retries} attempts. Please try again."
+    }
     # NOTE: We do NOT close the driver here - it stays open for next request
 
 # --- Endpoints ---
