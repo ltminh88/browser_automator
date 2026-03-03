@@ -68,7 +68,7 @@ ENV DISPLAY=:99 \
     API_HOST=0.0.0.0 \
     API_PORT=8000 \
     RUN_MODE=server \
-    ENABLE_VNC=false \
+    ENABLE_VNC=true \
     CHROME_NO_SANDBOX=true
 
 # ---- Expose ports ----
