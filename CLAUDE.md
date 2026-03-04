@@ -1,11 +1,31 @@
 # CLAUDE.md - Browser Automator
 
 > 📌 **Context file for AI assistants** - Đọc file này trước khi làm việc với project.
+>
+> ⚠️ **BẮT BUỘC**: Trước khi thực hiện bất kỳ thay đổi code nào, hãy đọc [`STATE_MACHINES.md`](STATE_MACHINES.md) để hiểu flow và trạng thái của từng component. Mọi thay đổi phải tuân theo state machine tương ứng.
+
+## State Machines (Tham chiếu bắt buộc)
+
+File [`STATE_MACHINES.md`](STATE_MACHINES.md) mô tả 7 state machines cho toàn bộ hệ thống:
+
+| # | State Machine | File liên quan | Khi nào cần đọc |
+|---|---------------|----------------|-----------------|
+| 1 | Browser Driver Lifecycle | `api_server.py`, `drivers/factory.py` | Sửa driver init, health check, retry logic |
+| 2 | Request Pipeline | `api_server.py` | Sửa API endpoints, auth, lock, error handling |
+| 3 | Perplexity Query Flow | `automators/perplexity.py` | Sửa navigate, query, submit |
+| 4 | Gemini Query Flow | `automators/gemini.py` | Sửa Gemini login, query, text injection |
+| 5 | Response Extraction | `automators/perplexity.py` | Sửa polling logic, completion detection |
+| 6 | Model Selection | `automators/perplexity.py` | Sửa model menu, thinking toggle |
+| 7 | Deep Research | `automators/perplexity.py` | Sửa deep research activation |
+
+**Quy tắc**: Khi thay đổi code trong bất kỳ file nào ở cột "File liên quan", phải kiểm tra state machine tương ứng để đảm bảo transition logic vẫn đúng. Nếu thay đổi làm thay đổi state/transition, phải cập nhật `STATE_MACHINES.md` cùng lúc.
 
 ## Project Status
-- **Current state**: Production (v1.0.0)
-- **Last updated**: 2026-01-27
+- **Current state**: Production (v1.1.0 - Container)
+- **Last updated**: 2026-03-04
 - **Primary use**: Backend AI query engine cho VN Stock Signals
+- **Deployment**: Docker container trên server 172.104.44.51:8000
+- **Branch**: `container` (production), `main` (local dev)
 
 ---
 
@@ -223,9 +243,10 @@ browser_automator/
    - Priority levels cho requests
 
 ### Nice to Have
-6. **Docker deployment**
-   - Containerize với headless Chrome
-   
+6. **Docker deployment** ✅ DONE
+   - Containerize với headless Chrome + Xvfb + tini + noVNC
+   - Deploy trên server 172.104.44.51
+
 7. **Multiple browser instances**
    - Pool of browsers cho parallel queries
 
